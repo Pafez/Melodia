@@ -1,60 +1,113 @@
 package com.pafez.melodia.rhythm;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
-
 public final class RhythmLaneMapper {
 
-	private final List<Integer> sortedPitches;
-	private final int laneCount;
+	public static final int FIRST_COLUMN_MIDI_NOTE = 60;
 
-	private RhythmLaneMapper(List<Integer> sortedPitches, int laneCount) {
+	private final int laneCount;
+	private final int lowerPitchBound;
+	private final int upperPitchBound;
+	private final int[] columnLowerBounds;
+	private final int[] columnUpperBounds;
+
+	private RhythmLaneMapper(int lowerPitchBound, int upperPitchBound, int laneCount) {
 		if (laneCount <= 0) {
 			throw new IllegalArgumentException("Lane count must be positive.");
 		}
-		if (sortedPitches == null || sortedPitches.isEmpty()) {
-			throw new IllegalArgumentException("At least one pitch is required to build a lane map.");
+		if (lowerPitchBound > upperPitchBound) {
+			throw new IllegalArgumentException("Lower pitch bound cannot be greater than the upper pitch bound.");
 		}
-		this.sortedPitches = Collections.unmodifiableList(new ArrayList<>(sortedPitches));
 		this.laneCount = laneCount;
+		this.lowerPitchBound = lowerPitchBound;
+		this.upperPitchBound = upperPitchBound;
+		this.columnLowerBounds = new int[laneCount];
+		this.columnUpperBounds = new int[laneCount];
+		buildColumns();
 	}
 
 	public static RhythmLaneMapper fromChart(RhythmChart chart, int laneCount) {
-		Set<Integer> unique = new HashSet<>(chart.getUniquePitches());
-		List<Integer> sorted = new ArrayList<>(unique);
-		Collections.sort(sorted);
-		return new RhythmLaneMapper(sorted, laneCount);
+		return new RhythmLaneMapper(chart.getLowerPitchBound(), chart.getUpperPitchBound(), laneCount);
 	}
 
 	public int getLaneCount() {
 		return laneCount;
 	}
 
-	public int getLaneForPitch(int midiPitch) {
-		int exactIndex = Collections.binarySearch(sortedPitches, midiPitch);
-		int pitchIndex = exactIndex >= 0 ? exactIndex : findNearestPitchIndex(midiPitch);
-		if (sortedPitches.size() <= laneCount) {
-			return pitchIndex;
-		}
-		return Math.min(laneCount - 1, (int) Math.floor((pitchIndex * (double) laneCount) / sortedPitches.size()));
+	public int getLowerPitchBound() {
+		return lowerPitchBound;
 	}
 
-	private int findNearestPitchIndex(int midiPitch) {
-		int insertionPoint = -Collections.binarySearch(sortedPitches, midiPitch) - 1;
-		if (insertionPoint <= 0) {
+	public int getUpperPitchBound() {
+		return upperPitchBound;
+	}
+
+	public int getColumnLowerBound(int lane) {
+		validateLane(lane);
+		return columnLowerBounds[lane];
+	}
+
+	public int getColumnUpperBound(int lane) {
+		validateLane(lane);
+		return columnUpperBounds[lane];
+	}
+
+	public int getLaneForPitch(int midiPitch) {
+		if (laneCount == 1) {
 			return 0;
 		}
-		if (insertionPoint >= sortedPitches.size()) {
-			return sortedPitches.size() - 1;
+		if (midiPitch <= columnLowerBounds[0]) {
+			return 0;
+		}
+		if (midiPitch >= columnUpperBounds[laneCount - 1]) {
+			return laneCount - 1;
 		}
 
-		int lowerPitch = sortedPitches.get(insertionPoint - 1);
-		int upperPitch = sortedPitches.get(insertionPoint);
-		int lowerDistance = Math.abs(midiPitch - lowerPitch);
-		int upperDistance = Math.abs(upperPitch - midiPitch);
-		return upperDistance < lowerDistance ? insertionPoint : insertionPoint - 1;
+		for (int lane = 0; lane < laneCount; lane++) {
+			if (columnUpperBounds[lane] < columnLowerBounds[lane]) {
+				continue;
+			}
+			if (midiPitch >= columnLowerBounds[lane] && midiPitch <= columnUpperBounds[lane]) {
+				return lane;
+			}
+		}
+
+		for (int lane = 0; lane < laneCount - 1; lane++) {
+			if (midiPitch < columnLowerBounds[lane + 1]) {
+				return lane;
+			}
+		}
+		return laneCount - 1;
+	}
+
+	private void buildColumns() {
+		int rangeStart = FIRST_COLUMN_MIDI_NOTE;
+		int rangeEnd = Math.max(FIRST_COLUMN_MIDI_NOTE, upperPitchBound);
+		int rangeSize = rangeEnd - rangeStart + 1;
+		int baseWidth = rangeSize / laneCount;
+		int remainder = rangeSize % laneCount;
+		int currentPitch = rangeStart;
+
+		for (int lane = 0; lane < laneCount; lane++) {
+			int width = baseWidth + (lane < remainder ? 1 : 0);
+			if (width <= 0) {
+				columnLowerBounds[lane] = currentPitch;
+				columnUpperBounds[lane] = currentPitch - 1;
+				continue;
+			}
+			columnLowerBounds[lane] = currentPitch;
+			columnUpperBounds[lane] = currentPitch + width - 1;
+			currentPitch += width;
+		}
+
+		columnLowerBounds[0] = FIRST_COLUMN_MIDI_NOTE;
+		if (columnUpperBounds[0] < columnLowerBounds[0]) {
+			columnUpperBounds[0] = columnLowerBounds[0];
+		}
+	}
+
+	private void validateLane(int lane) {
+		if (lane < 0 || lane >= laneCount) {
+			throw new IllegalArgumentException("Lane index out of range: " + lane);
+		}
 	}
 }

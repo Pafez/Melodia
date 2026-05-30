@@ -31,6 +31,15 @@ public final class RhythmChartParser {
 			int expectedNotes = Integer.parseInt(header[0]);
 			long durationMs = Long.parseLong(header[1]);
 			double bpm = parseBpm(header[2]);
+			int lowerPitchBound;
+			int upperPitchBound;
+			if (header.length >= 5) {
+				lowerPitchBound = Integer.parseInt(header[3]);
+				upperPitchBound = Integer.parseInt(header[4]);
+			} else {
+				lowerPitchBound = Integer.MIN_VALUE;
+				upperPitchBound = Integer.MAX_VALUE;
+			}
 
 			List<RhythmNote> notes = new ArrayList<>(Math.max(1, expectedNotes));
 			String line;
@@ -52,7 +61,14 @@ public final class RhythmChartParser {
 						"Chart header expects %d notes but parsed %d notes.", expectedNotes, notes.size()));
 			}
 
-			return new RhythmChart(sourceName, durationMs, bpm, notes);
+			if (header.length < 5) {
+				int actualLowerBound = notes.stream().mapToInt(RhythmNote::getMidiPitch).min().orElse(lowerPitchBound);
+				int actualUpperBound = notes.stream().mapToInt(RhythmNote::getMidiPitch).max().orElse(upperPitchBound);
+				lowerPitchBound = actualLowerBound;
+				upperPitchBound = actualUpperBound;
+			}
+
+			return new RhythmChart(sourceName, durationMs, bpm, lowerPitchBound, upperPitchBound, notes);
 		} catch (IOException e) {
 			throw new IllegalStateException("Unexpected I/O while parsing chart text.", e);
 		}

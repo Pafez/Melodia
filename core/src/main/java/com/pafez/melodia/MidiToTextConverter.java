@@ -106,6 +106,10 @@ public final class MidiToTextConverter {
         long sequenceDurationMs = Math.round(sequence.getMicrosecondLength() / 1000.0);
         long maxNoteEndMs = notes.stream().mapToLong(NoteRecord::getEndMs).max().orElse(0L);
         long totalDurationMs = Math.max(sequenceDurationMs, maxNoteEndMs);
+        int lowerPitch = notes.stream().mapToInt(NoteRecord::getPitch).min().orElseThrow(() ->
+            new IllegalArgumentException("MIDI contains no note events: " + midiFile));
+        int upperPitch = notes.stream().mapToInt(NoteRecord::getPitch).max().orElseThrow(() ->
+            new IllegalArgumentException("MIDI contains no note events: " + midiFile));
 
         Files.createDirectories(outputFile.getParent());
         double bpmToWrite = manualBpm > 0.0 ? manualBpm : extractedBpm;
@@ -119,7 +123,7 @@ public final class MidiToTextConverter {
         }
 
         try (BufferedWriter writer = Files.newBufferedWriter(outputFile, StandardCharsets.UTF_8)) {
-            writer.write(notes.size() + " " + totalDurationMs + " " + bpmStr);
+            writer.write(notes.size() + " " + totalDurationMs + " " + bpmStr + " " + lowerPitch + " " + upperPitch);
             writer.newLine();
             for (NoteRecord note : notes) {
                 writer.write(note.getPitch() + " " + note.getStartMs() + " " + note.getEndMs());

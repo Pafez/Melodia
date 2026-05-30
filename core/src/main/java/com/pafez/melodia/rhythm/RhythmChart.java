@@ -9,16 +9,24 @@ public final class RhythmChart {
 	private final String sourceName;
 	private final long durationMs;
 	private final double bpm;
+	private final int lowerPitchBound;
+	private final int upperPitchBound;
 	private final List<RhythmNote> notes;
 	private final List<Integer> uniquePitches;
 
-	public RhythmChart(String sourceName, long durationMs, double bpm, List<RhythmNote> notes) {
+	public RhythmChart(String sourceName, long durationMs, double bpm, int lowerPitchBound, int upperPitchBound,
+						   List<RhythmNote> notes) {
 		if (notes == null || notes.isEmpty()) {
 			throw new IllegalArgumentException("A rhythm chart must contain at least one note.");
+		}
+		if (lowerPitchBound > upperPitchBound) {
+			throw new IllegalArgumentException("Lower pitch bound cannot be greater than the upper pitch bound.");
 		}
 		this.sourceName = sourceName == null ? "unknown" : sourceName;
 		this.durationMs = durationMs;
 		this.bpm = bpm;
+		this.lowerPitchBound = lowerPitchBound;
+		this.upperPitchBound = upperPitchBound;
 		this.notes = Collections.unmodifiableList(new ArrayList<>(notes));
 		this.uniquePitches = buildUniquePitches(notes);
 	}
@@ -33,6 +41,14 @@ public final class RhythmChart {
 
 	public double getBpm() {
 		return bpm;
+	}
+
+	public int getLowerPitchBound() {
+		return lowerPitchBound;
+	}
+
+	public int getUpperPitchBound() {
+		return upperPitchBound;
 	}
 
 	public List<RhythmNote> getNotes() {

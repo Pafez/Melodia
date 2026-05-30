@@ -35,7 +35,8 @@ public final class RhythmGameScreen implements Screen, InputProcessor {
 	};
 
 	private final String chartPath;
-	private final RhythmGameRules rules;
+	private final RhythmGameRules baseRules;
+	private final RhythmKeyBindings baseKeyBindings;
 	private final OrthographicCamera camera = new OrthographicCamera();
 	private final ShapeRenderer shapeRenderer = new ShapeRenderer();
 	private final SpriteBatch batch = new SpriteBatch();
@@ -48,21 +49,66 @@ public final class RhythmGameScreen implements Screen, InputProcessor {
 	private Instrument instrument;
 	private Throwable startupError;
 	private long sessionStartNanos;
+	private RhythmGameRules activeRules;
+	private RhythmKeyBindings activeKeyBindings;
 	private float lanePadding = 6f;
 
 	public RhythmGameScreen(String chartPath) {
-		this(chartPath, RhythmGameRules.defaultRules());
+		this(chartPath, RhythmGameRules.defaultRules(), RhythmKeyBindings.defaultNumberRow());
 	}
 
 	public RhythmGameScreen(String chartPath, RhythmGameRules rules) {
+		this(chartPath, rules, RhythmKeyBindings.defaultNumberRow());
+	}
+
+	public RhythmGameScreen(String chartPath, RhythmGameRules rules, RhythmKeyBindings keyBindings) {
 		if (chartPath == null || chartPath.trim().isEmpty()) {
 			throw new IllegalArgumentException("Chart path cannot be empty.");
 		}
 		if (rules == null) {
 			throw new IllegalArgumentException("Rules cannot be null.");
 		}
+		if (keyBindings == null) {
+			throw new IllegalArgumentException("Key bindings cannot be null.");
+		}
 		this.chartPath = chartPath;
-		this.rules = rules;
+		this.baseRules = rules;
+		this.baseKeyBindings = keyBindings;
+		this.activeRules = rules;
+		this.activeKeyBindings = keyBindings;
+	}
+
+	public int getColumnCount() {
+		return activeRules.getLaneCount();
+	}
+
+	public void setColumnCount(int columnCount) {
+		if (columnCount > activeKeyBindings.getLaneCount()) {
+			throw new IllegalArgumentException("Current key bindings only define " + activeKeyBindings.getLaneCount()
+					+ " lanes. Update the key bindings first.");
+		}
+		activeRules = baseRules.withLaneCount(columnCount);
+		if (chart != null) {
+			restart();
+		}
+	}
+
+	public RhythmKeyBindings getKeyBindings() {
+		return activeKeyBindings;
+	}
+
+	public void setKeyBindings(RhythmKeyBindings keyBindings) {
+		if (keyBindings == null) {
+			throw new IllegalArgumentException("Key bindings cannot be null.");
+		}
+		if (keyBindings.getLaneCount() < activeRules.getLaneCount()) {
+			throw new IllegalArgumentException("Key bindings must define at least " + activeRules.getLaneCount()
+					+ " keys for the current column count.");
+		}
+		activeKeyBindings = keyBindings;
+		if (chart != null) {
+			restart();
+		}
 	}
 
 	@Override
@@ -72,8 +118,8 @@ public final class RhythmGameScreen implements Screen, InputProcessor {
 		try {
 			String chartText = Gdx.files.internal(chartPath).readString("UTF-8");
 			chart = RhythmChartParser.parse(chartPath, chartText);
-			laneMapper = RhythmLaneMapper.fromChart(chart, rules.getLaneCount());
-			session = new RhythmSession(chart, laneMapper, rules);
+			laneMapper = RhythmLaneMapper.fromChart(chart, activeRules.getLaneCount());
+			session = new RhythmSession(chart, laneMapper, activeRules);
 			try {
 				instrument = Instrument.loadPiano();
 			} catch (RuntimeException audioFailure) {
@@ -155,7 +201,7 @@ public final class RhythmGameScreen implements Screen, InputProcessor {
 			restart();
 			return true;
 		}
-		int lane = keycodeToLane(keycode);
+		int lane = activeKeyBindings.findLaneForKeyCode(keycode, activeRules.getLaneCount());
 		if (lane >= 0) {
 			hitLane(lane);
 			return true;
@@ -287,8 +333,9 @@ public final class RhythmGameScreen implements Screen, InputProcessor {
 		drawText("Score: " + session.getScoreState().getScore(), x, y - 28f, TEXT_PRIMARY);
 		drawText("Combo: " + session.getScoreState().getCombo() + "  x" + formatMultiplier(session.getScoreState().getMultiplier()), x, y - 52f, TEXT_PRIMARY);
 		drawText("Accuracy: " + formatPercent(session.getScoreState().getAccuracyPercent()) + "%", x, y - 76f, TEXT_MUTED);
+		drawText("Columns: " + activeRules.getLaneCount() + " (3-9)", x, y - 100f, TEXT_MUTED);
 		drawText("Perfect: " + session.getScoreState().getPerfectCount() + "  Great: " + session.getScoreState().getGreatCount()
-				+ "  Good: " + session.getScoreState().getGoodCount() + "  Miss: " + session.getScoreState().getMissCount(), x, y - 100f, TEXT_MUTED);
+				+ "  Good: " + session.getScoreState().getGoodCount() + "  Miss: " + session.getScoreState().getMissCount(), x, y - 124f, TEXT_MUTED);
 
 		String judgment = session.getScoreState().getLastJudgment().getLabel();
 		if (!judgment.isEmpty() && songTimeMs - session.getScoreState().getLastJudgmentTimeMs() <= 900L) {
@@ -300,7 +347,7 @@ public final class RhythmGameScreen implements Screen, InputProcessor {
 		}
 
 		font.setColor(TEXT_MUTED);
-		String help = "Keys: A S D F G or click the lanes | R restart | Esc exit";
+		String help = "Keys: " + activeKeyBindings.describe(activeRules.getLaneCount()) + " | click lanes | R restart | Esc exit";
 		glyphLayout.setText(font, help);
 		font.draw(batch, help, width - glyphLayout.width - 18f, 24f);
 		batch.end();
@@ -339,11 +386,11 @@ public final class RhythmGameScreen implements Screen, InputProcessor {
 
 	private float timeToY(long noteTimeMs, long songTimeMs, float judgeY, float travelDistance) {
 		float offsetMs = noteTimeMs - songTimeMs;
-		return judgeY + (offsetMs / rules.getTravelTimeMs()) * travelDistance;
+		return judgeY + (offsetMs / activeRules.getTravelTimeMs()) * travelDistance;
 	}
 
 	private float timeSpanToPixels(long timeSpanMs, float travelDistance) {
-		return Math.max(28f, (timeSpanMs / (float) rules.getTravelTimeMs()) * travelDistance);
+		return Math.max(28f, (timeSpanMs / (float) activeRules.getTravelTimeMs()) * travelDistance);
 	}
 
 	private String formatMultiplier(float value) {
@@ -367,23 +414,6 @@ public final class RhythmGameScreen implements Screen, InputProcessor {
 		return new Color(0.96f, 0.60f, 0.44f, 1f);
 	}
 
-	private int keycodeToLane(int keycode) {
-		switch (keycode) {
-			case Input.Keys.A:
-				return 0;
-			case Input.Keys.S:
-				return 1;
-			case Input.Keys.D:
-				return 2;
-			case Input.Keys.F:
-				return 3;
-			case Input.Keys.G:
-				return 4;
-			default:
-				return -1;
-		}
-	}
-
 	private int getLaneFromScreenX(int screenX) {
 		if (laneMapper == null) {
 			return -1;
@@ -398,6 +428,6 @@ public final class RhythmGameScreen implements Screen, InputProcessor {
 	}
 
 	private long getChartTimeMs() {
-		return Math.round(TimeUtils.timeSinceNanos(sessionStartNanos) / 1_000_000.0) - rules.getLeadInMs();
+		return Math.round(TimeUtils.timeSinceNanos(sessionStartNanos) / 1_000_000.0) - activeRules.getLeadInMs();
 	}
 }
