@@ -8,11 +8,23 @@ import java.util.List;
 
 public final class RhythmSession {
 
+	private static final class ActiveHoldNote {
+		private final int noteIndex;
+		private final RhythmJudgment initialJudgment;
+
+		private ActiveHoldNote(int noteIndex, RhythmJudgment initialJudgment) {
+			this.noteIndex = noteIndex;
+			this.initialJudgment = initialJudgment;
+		}
+	}
+
 	private final RhythmChart chart;
 	private final RhythmGameRules rules;
 	private final RhythmLaneMapper laneMapper;
 	private final List<Deque<Integer>> laneQueues;
 	private final BitSet resolvedNotes;
+	private final ActiveHoldNote[] activeHoldNotes;
+	private final boolean[] lanePressed;
 	private final RhythmScoreState scoreState = new RhythmScoreState();
 
 	private int resolvedCount;
@@ -32,6 +44,8 @@ public final class RhythmSession {
 		this.laneMapper = laneMapper;
 		this.resolvedNotes = new BitSet(chart.getNotes().size());
 		this.laneQueues = new ArrayList<>(laneMapper.getLaneCount());
+		this.activeHoldNotes = new ActiveHoldNote[laneMapper.getLaneCount()];
+		this.lanePressed = new boolean[laneMapper.getLaneCount()];
 		for (int lane = 0; lane < laneMapper.getLaneCount(); lane++) {
 			laneQueues.add(new ArrayDeque<Integer>());
 		}
@@ -58,6 +72,15 @@ public final class RhythmSession {
 		return resolvedNotes.get(noteIndex);
 	}
 
+	public boolean isHoldNoteActive(int noteIndex) {
+		for (ActiveHoldNote activeHoldNote : activeHoldNotes) {
+			if (activeHoldNote != null && activeHoldNote.noteIndex == noteIndex) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	public int getResolvedCount() {
 		return resolvedCount;
 	}
@@ -79,14 +102,42 @@ public final class RhythmSession {
 				pruneResolvedHeads(laneQueue);
 			}
 		}
+		for (int lane = 0; lane < activeHoldNotes.length; lane++) {
+			ActiveHoldNote activeHoldNote = activeHoldNotes[lane];
+			if (activeHoldNote == null) {
+				continue;
+			}
+			if (resolvedNotes.get(activeHoldNote.noteIndex)) {
+				activeHoldNotes[lane] = null;
+				continue;
+			}
+			RhythmNote note = chart.getNotes().get(activeHoldNote.noteIndex);
+			if (songTimeMs < note.getEndTimeMs()) {
+				continue;
+			}
+			if (lanePressed[lane]) {
+				resolveHit(activeHoldNote.noteIndex, activeHoldNote.initialJudgment, songTimeMs);
+			} else {
+				resolveMiss(activeHoldNote.noteIndex, songTimeMs);
+			}
+			activeHoldNotes[lane] = null;
+		}
 	}
 
 	public RhythmHitResult hitLane(int lane, long songTimeMs) {
+		return pressLane(lane, songTimeMs);
+	}
+
+	public RhythmHitResult pressLane(int lane, long songTimeMs) {
 		if (lane < 0 || lane >= laneQueues.size()) {
 			return RhythmHitResult.ignored();
 		}
 
 		update(songTimeMs);
+		if (lanePressed[lane]) {
+			return RhythmHitResult.ignored();
+		}
+		lanePressed[lane] = true;
 		Deque<Integer> laneQueue = laneQueues.get(lane);
 		pruneResolvedHeads(laneQueue);
 		if (laneQueue.isEmpty()) {
@@ -101,8 +152,42 @@ public final class RhythmSession {
 			return RhythmHitResult.ignored();
 		}
 
-		resolveHit(laneQueue.removeFirst(), judgment, songTimeMs);
+		int resolvedNoteIndex = laneQueue.removeFirst();
+		if (note.isHoldNote()) {
+			activeHoldNotes[lane] = new ActiveHoldNote(resolvedNoteIndex, judgment);
+			return new RhythmHitResult(judgment, note, true);
+		}
+
+		resolveHit(resolvedNoteIndex, judgment, songTimeMs);
 		return new RhythmHitResult(judgment, note, true);
+	}
+
+	public RhythmHitResult releaseLane(int lane, long songTimeMs) {
+		if (lane < 0 || lane >= laneQueues.size()) {
+			return RhythmHitResult.ignored();
+		}
+
+		update(songTimeMs);
+		if (!lanePressed[lane]) {
+			return RhythmHitResult.ignored();
+		}
+		lanePressed[lane] = false;
+
+		ActiveHoldNote activeHoldNote = activeHoldNotes[lane];
+		if (activeHoldNote == null || resolvedNotes.get(activeHoldNote.noteIndex)) {
+			activeHoldNotes[lane] = null;
+			return RhythmHitResult.ignored();
+		}
+
+		RhythmNote note = chart.getNotes().get(activeHoldNote.noteIndex);
+		if (songTimeMs >= note.getEndTimeMs()) {
+			activeHoldNotes[lane] = null;
+			return RhythmHitResult.ignored();
+		}
+
+		activeHoldNotes[lane] = null;
+		resolveMiss(activeHoldNote.noteIndex, songTimeMs);
+		return new RhythmHitResult(RhythmJudgment.MISS, note, true);
 	}
 
 	private void buildLaneQueues() {

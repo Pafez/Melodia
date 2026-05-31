@@ -28,7 +28,12 @@ public final class MidiToTextConverter {
     private static final int META_TEMPO = 0x51;
     private static final int NOTE_ON = 0x90;
     private static final int NOTE_OFF = 0x80;
-    private static final int DEFAULT_TEMPO_US_PER_QN = 500_000;
+    /** Default BPM used when no tempo meta-message is present and no manual BPM is passed. */
+    public static double DEFAULT_BPM = 155.0; // change this value in code to set default BPM
+    private static final int DEFAULT_TEMPO_US_PER_QN = (int) Math.round(60_000_000.0 / DEFAULT_BPM);
+    /** When true, always use DEFAULT_BPM unless a manual BPM is provided. */
+    public static boolean USE_DEFAULT_BPM = true; // set to true in code to force DEFAULT_BPM
+
 
     private MidiToTextConverter() {
     }
@@ -97,6 +102,10 @@ public final class MidiToTextConverter {
         if (manualBpm > 0.0) {
             int microsPerQuarter = (int) Math.round(60_000_000.0 / manualBpm);
             tickTimeConverter = TickTimeConverter.fixed(sequence.getResolution(), microsPerQuarter);
+        } else if (USE_DEFAULT_BPM) {
+            int microsPerQuarter = (int) Math.round(60_000_000.0 / DEFAULT_BPM);
+            tickTimeConverter = TickTimeConverter.fixed(sequence.getResolution(), microsPerQuarter);
+            extractedBpm = DEFAULT_BPM;
         } else {
             tickTimeConverter = TickTimeConverter.fromTrack(sequence, track);
             extractedBpm = 60_000_000.0 / tickTimeConverter.getInitialMicrosPerQuarter();
@@ -112,7 +121,14 @@ public final class MidiToTextConverter {
             new IllegalArgumentException("MIDI contains no note events: " + midiFile));
 
         Files.createDirectories(outputFile.getParent());
-        double bpmToWrite = manualBpm > 0.0 ? manualBpm : extractedBpm;
+        double bpmToWrite;
+        if (manualBpm > 0.0) {
+            bpmToWrite = manualBpm;
+        } else if (USE_DEFAULT_BPM) {
+            bpmToWrite = DEFAULT_BPM;
+        } else {
+            bpmToWrite = extractedBpm;
+        }
         String bpmStr = "-1";
         if (bpmToWrite > 0.0) {
             if (Math.abs(bpmToWrite - Math.round(bpmToWrite)) < 1e-9) {

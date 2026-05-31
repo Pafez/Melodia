@@ -65,9 +65,20 @@ public final class Instrument implements Disposable {
 
     public static Instrument load(String instrumentPath) {
         String normalizedPath = normalizeInstrumentPath(instrumentPath);
-        FileHandle root = Gdx.files.internal(normalizedPath);
-        if (!root.exists() || !root.isDirectory()) {
-            throw new IllegalArgumentException("Instrument folder not found: " + normalizedPath);
+        List<String> candidatePaths = buildCandidatePaths(normalizedPath);
+        FileHandle root = null;
+        String resolvedPath = null;
+        for (String candidatePath : candidatePaths) {
+            FileHandle candidateRoot = Gdx.files.internal(candidatePath);
+            if (candidateRoot.exists() && candidateRoot.isDirectory()) {
+                root = candidateRoot;
+                resolvedPath = candidatePath;
+                break;
+            }
+        }
+        if (root == null) {
+            throw new IllegalArgumentException("Instrument folder not found: " + normalizedPath
+                    + " (looked in " + candidatePaths + ")");
         }
 
         FileHandle[] files = root.list();
@@ -86,10 +97,10 @@ public final class Instrument implements Disposable {
         }
 
         if (sounds.isEmpty()) {
-            throw new IllegalStateException("No playable note samples were found in: " + normalizedPath);
+            throw new IllegalStateException("No playable note samples were found in: " + resolvedPath);
         }
 
-        return new Instrument(normalizedPath, sounds);
+        return new Instrument(resolvedPath, sounds);
     }
 
     public static Instrument loadPiano() {
@@ -161,6 +172,15 @@ public final class Instrument implements Disposable {
             normalized = normalized.substring(1);
         }
         return normalized;
+    }
+
+    private static List<String> buildCandidatePaths(String normalizedPath) {
+        List<String> candidatePaths = new ArrayList<>();
+        candidatePaths.add(normalizedPath);
+        if (!normalizedPath.startsWith("assets/")) {
+            candidatePaths.add("assets/" + normalizedPath);
+        }
+        return candidatePaths;
     }
 
     private static Integer parseMidiNoteFromFileName(String fileName) {

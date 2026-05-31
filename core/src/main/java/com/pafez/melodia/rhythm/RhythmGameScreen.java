@@ -4,7 +4,6 @@ import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Input;
 import com.badlogic.gdx.InputProcessor;
 import com.badlogic.gdx.Screen;
-import com.badlogic.gdx.audio.Sound;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.OrthographicCamera;
@@ -15,6 +14,9 @@ import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 import com.badlogic.gdx.math.MathUtils;
 import com.badlogic.gdx.utils.TimeUtils;
 import com.pafez.melodia.Instrument;
+
+import java.util.HashMap;
+import java.util.Map;
 
 public final class RhythmGameScreen implements Screen, InputProcessor {
 
@@ -52,6 +54,8 @@ public final class RhythmGameScreen implements Screen, InputProcessor {
 	private RhythmGameRules activeRules;
 	private RhythmKeyBindings activeKeyBindings;
 	private float lanePadding = 6f;
+	private final int[] lanePressCounts = new int[RhythmGameRules.MAX_LANE_COUNT];
+	private final Map<Integer, Integer> touchLaneByPointer = new HashMap<>();
 
 	public RhythmGameScreen(String chartPath) {
 		this(chartPath, RhythmGameRules.defaultRules(), RhythmKeyBindings.defaultNumberRow());
@@ -116,7 +120,7 @@ public final class RhythmGameScreen implements Screen, InputProcessor {
 		sessionStartNanos = TimeUtils.nanoTime();
 		startupError = null;
 		try {
-			String chartText = Gdx.files.internal(chartPath).readString("UTF-8");
+			String chartText = readChartText(chartPath);
 			chart = RhythmChartParser.parse(chartPath, chartText);
 			laneMapper = RhythmLaneMapper.fromChart(chart, activeRules.getLaneCount());
 			session = new RhythmSession(chart, laneMapper, activeRules);
@@ -203,7 +207,10 @@ public final class RhythmGameScreen implements Screen, InputProcessor {
 		}
 		int lane = activeKeyBindings.findLaneForKeyCode(keycode, activeRules.getLaneCount());
 		if (lane >= 0) {
-			hitLane(lane);
+			lanePressCounts[lane]++;
+			if (lanePressCounts[lane] == 1) {
+				pressLane(lane);
+			}
 			return true;
 		}
 		return false;
@@ -221,13 +228,44 @@ public final class RhythmGameScreen implements Screen, InputProcessor {
 		if (lane < 0) {
 			return false;
 		}
-		hitLane(lane);
+		touchLaneByPointer.put(pointer, lane);
+		lanePressCounts[lane]++;
+		if (lanePressCounts[lane] == 1) {
+			pressLane(lane);
+		}
 		return true;
 	}
 
-	@Override public boolean keyUp(int keycode) { return false; }
+	@Override
+	public boolean keyUp(int keycode) {
+		int lane = activeKeyBindings.findLaneForKeyCode(keycode, activeRules.getLaneCount());
+		if (lane < 0) {
+			return false;
+		}
+		if (lanePressCounts[lane] > 0) {
+			lanePressCounts[lane]--;
+			if (lanePressCounts[lane] == 0) {
+				releaseLane(lane);
+			}
+		}
+		return true;
+	}
+
 	@Override public boolean keyTyped(char character) { return false; }
-	@Override public boolean touchUp(int screenX, int screenY, int pointer, int button) { return false; }
+	@Override
+	public boolean touchUp(int screenX, int screenY, int pointer, int button) {
+		Integer lane = touchLaneByPointer.remove(pointer);
+		if (lane == null) {
+			return false;
+		}
+		if (lanePressCounts[lane] > 0) {
+			lanePressCounts[lane]--;
+			if (lanePressCounts[lane] == 0) {
+				releaseLane(lane);
+			}
+		}
+		return true;
+	}
 	@Override public boolean touchCancelled(int screenX, int screenY, int pointer, int button) { return false; }
 	@Override public boolean touchDragged(int screenX, int screenY, int pointer) { return false; }
 	@Override public boolean mouseMoved(int screenX, int screenY) { return false; }
@@ -241,16 +279,22 @@ public final class RhythmGameScreen implements Screen, InputProcessor {
 		show();
 	}
 
-	private void hitLane(int lane) {
+	private void pressLane(int lane) {
 		if (session == null) {
 			return;
 		}
 		long songTimeMs = getChartTimeMs();
-		RhythmHitResult result = session.hitLane(lane, songTimeMs);
+		RhythmHitResult result = session.pressLane(lane, songTimeMs);
 		if (result.isConsumed() && result.getNote() != null && instrument != null) {
-			Sound sound = instrument.getSound(result.getNote().getMidiPitch());
-			sound.play(0.85f);
+			instrument.play(result.getNote().getMidiPitch(), 0.85f);
 		}
+	}
+
+	private void releaseLane(int lane) {
+		if (session == null) {
+			return;
+		}
+		session.releaseLane(lane, getChartTimeMs());
 	}
 
 	private void drawBackground(float width, float height) {
@@ -298,19 +342,30 @@ public final class RhythmGameScreen implements Screen, InputProcessor {
 				continue;
 			}
 			RhythmNote note = chart.getNotes().get(noteIndex);
-			float centerY = timeToY(note.getStartTimeMs(), songTimeMs, judgeY, travelDistance);
-			if (centerY < -80f || centerY > height + 120f) {
-				continue;
-			}
 
 			int lane = laneMapper.getLaneForPitch(note.getMidiPitch());
 			float laneX = lane * laneWidth;
 			float noteWidth = laneWidth - (lanePadding * 2f);
-			float noteHeight = note.isHoldNote()
-					? Math.max(28f, timeSpanToPixels(note.getEndTimeMs() - note.getStartTimeMs(), travelDistance))
-					: 22f;
 			float drawX = laneX + lanePadding;
-			float drawY = centerY - noteHeight / 2f;
+
+			float drawY;
+			float noteHeight;
+			if (note.isHoldNote()) {
+				float startY = timeToY(note.getStartTimeMs(), songTimeMs, judgeY, travelDistance);
+				float endY = timeToY(note.getEndTimeMs(), songTimeMs, judgeY, travelDistance);
+				drawY = Math.min(startY, endY);
+				noteHeight = Math.max(28f, Math.abs(endY - startY));
+				if (drawY + noteHeight < -80f || drawY > height + 120f) {
+					continue;
+				}
+			} else {
+				float centerY = timeToY(note.getStartTimeMs(), songTimeMs, judgeY, travelDistance);
+				if (centerY < -80f || centerY > height + 120f) {
+					continue;
+				}
+				noteHeight = 22f;
+				drawY = centerY - noteHeight / 2f;
+			}
 
 			Color laneColor = LANE_COLORS[lane % LANE_COLORS.length];
 			shapeRenderer.setColor(0f, 0f, 0f, 0.35f);
@@ -319,6 +374,10 @@ public final class RhythmGameScreen implements Screen, InputProcessor {
 			shapeRenderer.rect(drawX, drawY, noteWidth, noteHeight);
 			shapeRenderer.setColor(1f, 1f, 1f, 0.18f);
 			shapeRenderer.rect(drawX + 3f, drawY + noteHeight - 5f, noteWidth - 6f, 3f);
+			if (note.isHoldNote() && session.isHoldNoteActive(noteIndex)) {
+				shapeRenderer.setColor(1f, 1f, 1f, 0.12f);
+				shapeRenderer.rect(drawX, drawY, noteWidth, noteHeight);
+			}
 		}
 		shapeRenderer.end();
 	}
@@ -399,6 +458,19 @@ public final class RhythmGameScreen implements Screen, InputProcessor {
 
 	private String formatPercent(float value) {
 		return String.format(java.util.Locale.ROOT, "%.1f", value);
+	}
+
+	private String readChartText(String path) {
+		String[] candidatePaths = new String[] {
+			path,
+			"assets/" + path
+		};
+		for (String candidatePath : candidatePaths) {
+			if (Gdx.files.local(candidatePath).exists()) {
+				return Gdx.files.local(candidatePath).readString("UTF-8");
+			}
+		}
+		return Gdx.files.internal(path).readString("UTF-8");
 	}
 
 	private Color colorForJudgment(RhythmJudgment judgment) {
